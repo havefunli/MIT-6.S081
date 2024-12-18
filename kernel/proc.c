@@ -29,12 +29,12 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
+      initlock(&p->lock, "proc"); 
 
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
+      char *pa = kalloc(); // 获取一个页面的大小
       if(pa == 0)
         panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
@@ -42,6 +42,28 @@ procinit(void)
       p->kstack = va;
   }
   kvminithart();
+}
+
+
+// 获取非未使用的进程的数目
+int
+use_nproc(void)
+{
+  int cnt = 0;
+
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++) {
+
+    acquire(&p->lock);
+
+    if (p->state != UNUSED) {
+      cnt += 1;
+    }
+
+    release(&p->lock);
+  }
+
+  return cnt;
 }
 
 // Must be called with interrupts disabled,
@@ -279,6 +301,9 @@ fork(void)
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
+
+  // copy trace_mask from parent
+  np->trace_mask = p->trace_mask;
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
