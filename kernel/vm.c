@@ -551,5 +551,6 @@ int vmprint(pagetable_t pt)
 {
   printf("page table %p\n", pt);
   vmprint_helper(pt, 0);
+  
   return 0;
 }
