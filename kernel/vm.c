@@ -55,6 +55,46 @@ void kvminit()
   // ==============================================
 }
 
+// ================================================
+// create a direct-map page table for the user.
+pagetable_t
+ukvminit()
+{
+  pagetable_t kpagetable = (pagetable_t) kalloc();
+  if (kpagetable == 0) {
+    return kpagetable;
+  }
+  memset(kpagetable, 0, PGSIZE);
+  // 把固定的常数映射照旧搬运过来
+  // uart registers
+  ukvmmap(kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  // virtio mmio disk interface
+  ukvmmap(kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  // CLINT
+  ukvmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  // PLIC
+  ukvmmap(kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  // map kernel text executable and read-only.
+  ukvmmap(kpagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  // map kernel data and the physical RAM we'll make use of.
+  ukvmmap(kpagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  ukvmmap(kpagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return kpagetable;
+}
+
+void
+ukvmmap(pagetable_t kpagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kpagetable, va, sz, pa, perm) != 0)
+    panic("ukvmmap");
+}
+
+
+// ================================================
+
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 // 将内核页表的根地址写入 SATP 寄存器
@@ -63,7 +103,15 @@ void kvminit()
 void kvminithart()
 {
   w_satp(MAKE_SATP(kernel_pagetable));
-  sfence_vma(); // 刷新页表
+  sfence_vma(); // 刷新 TLB
+}
+
+// 不再使用全局的内核页表，使用用户自己的
+// 刷新 TLB 缓存
+void ukvminithart(pagetable_t pagetable)
+{
+  w_satp(MAKE_SATP(pagetable));
+  sfence_vma();
 }
 
 // #define PX(level, va) ((((uint64) (va)) >> PXSHIFT(level)) & PXMASK)
@@ -333,6 +381,22 @@ void freewalk(pagetable_t pagetable)
     }
   }
   kfree((void *)pagetable);
+}
+
+void ufreewalk(pagetable_t pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      ufreewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+    pagetable[i] = 0;
+  }
+  kfree((void*)pagetable);
 }
 
 // Free user memory pages,

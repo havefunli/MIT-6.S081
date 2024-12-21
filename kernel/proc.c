@@ -15,6 +15,9 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+// 内核代码段的结束
+extern char etext[]; // kernel.ld sets this to end of kernel code.
+
 extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
@@ -22,6 +25,8 @@ static void freeproc(struct proc *p);
 extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
+// 用于在系统启动时为进程表中的所有进程结构进行初始化
+// 主要包括进程锁的初始化以及内核栈的分配和映射
 void
 procinit(void)
 {
@@ -34,6 +39,7 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
+      // 为每一个进程初始化内核栈
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
@@ -47,6 +53,7 @@ procinit(void)
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
 // to a different CPU.
+// 获取当前 CPU 的 ID
 int
 cpuid()
 {
@@ -73,6 +80,7 @@ myproc(void) {
   return p;
 }
 
+// 分配进程 ID
 int
 allocpid() {
   int pid;
@@ -89,6 +97,7 @@ allocpid() {
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
+// 初始化进程
 static struct proc*
 allocproc(void)
 {
@@ -121,10 +130,28 @@ found:
     return 0;
   }
 
+  // Allocate the per-proccess kernel-page-table
+  // 为每个用户进程分配内核页表
+  p->kernel_pageta = ukvminit();
+  if(p->kernel_pageta == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 将用户的内核栈映射到内核页表
+  uint64 va = KSTACK((int)(p - proc));
+  uint64 pa = kvmpa(va);
+  memset((void*)pa, 0, PGSIZE);
+  ukvmmap(p->kernel_pageta, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
+  // 设置 ra（返回地址寄存器）的值为 forkret 函数的地址
   p->context.ra = (uint64)forkret;
+  // 设置新进程的堆栈指针（sp）为内核栈（kstack）的顶部
   p->context.sp = p->kstack + PGSIZE;
 
   return p;
@@ -133,6 +160,7 @@ found:
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
+// 释放进程占用的空间
 static void
 freeproc(struct proc *p)
 {
@@ -142,6 +170,10 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if (p->kernel_pageta)
+    proc_freekpagetable(p);
+  p->kernel_pageta = 0;
+  p->kstack = 0 ;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -168,13 +200,15 @@ proc_pagetable(struct proc *p)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
   // to/from user space, so not PTE_U.
+  // TRAMPOLINE 映射：用于系统调用返回的特殊 trampoline 代码段
   if(mappages(pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
     uvmfree(pagetable, 0);
-    return 0;
+    return 0; 
   }
 
   // map the trapframe just below TRAMPOLINE, for trampoline.S.
+  // TRAPFRAME 映射：用于保存进程的陷入帧，以支持从用户态切换到内核态的上下文保存和恢复
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
@@ -195,6 +229,25 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+// Free a process's kernel page table, and not free the
+// physical memory it refers to.
+void 
+proc_freekpagetable(struct proc* p)
+{
+  pagetable_t kpagetable = p->kernel_pageta;
+
+  // 去除和硬件设备的映射
+  uvmunmap(kpagetable, p->kstack, PGSIZE/PGSIZE, 0);
+  uvmunmap(kpagetable, TRAMPOLINE, PGSIZE/PGSIZE, 0);
+  uvmunmap(kpagetable, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE, 0);
+  uvmunmap(kpagetable, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE, 0);
+  uvmunmap(kpagetable, PLIC, 0x400000/PGSIZE, 0);
+  uvmunmap(kpagetable, CLINT, 0x10000/PGSIZE, 0);
+  uvmunmap(kpagetable, VIRTIO0, PGSIZE/PGSIZE, 0);
+  uvmunmap(kpagetable, UART0, PGSIZE/PGSIZE, 0);
+  ufreewalk(kpagetable);
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -206,7 +259,6 @@ uchar initcode[] = {
   0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00
 };
-
 // Set up first user process.
 void
 userinit(void)
@@ -222,7 +274,10 @@ userinit(void)
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
+  // 用户态的程序计数器，从 0 考试
   p->trapframe->epc = 0;      // user program counter
+  // 栈指针初始化为用户空间的最高地址
+  // 这表示用户态程序的栈从页面顶部开始向下增长
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
@@ -235,6 +290,7 @@ userinit(void)
 
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
+// 增长或者是减少用户空间
 int
 growproc(int n)
 {
@@ -268,6 +324,7 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
+  // 将父亲的进程地址空间和页表拷贝到子进程
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
@@ -302,6 +359,7 @@ fork(void)
 
 // Pass p's abandoned children to init.
 // Caller must hold p->lock.
+// 回收孤儿进程
 void
 reparent(struct proc *p)
 {
@@ -377,17 +435,21 @@ exit(int status)
   acquire(&p->lock);
 
   // Give any children to init.
+  // 在退出之前处理孤儿进程
   reparent(p);
 
   // Parent might be sleeping in wait().
   wakeup1(original_parent);
 
+  // 获取当前的退出状态
+  // 将当前的状态设置为僵尸状态
   p->xstate = status;
   p->state = ZOMBIE;
 
   release(&original_parent->lock);
 
   // Jump into the scheduler, never to return.
+  // 让出 CPU 并且不再回来
   sched();
   panic("zombie exit");
 }
@@ -475,8 +537,12 @@ scheduler(void)
         c->proc = p;
         swtch(&c->context, &p->context);
 
+        // 切换页表刷新缓存
+        ukvminithart(p->kernel_pageta);
+
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();
         c->proc = 0;
 
         found = 1;
