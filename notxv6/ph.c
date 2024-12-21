@@ -8,6 +8,9 @@
 #define NBUCKET 5
 #define NKEYS 100000
 
+// 声明一个全局的锁
+pthread_mutex_t mutexes[NKEYS];
+
 struct entry {
   int key;
   int value;
@@ -38,8 +41,9 @@ insert(int key, int value, struct entry **p, struct entry *n)
 static 
 void put(int key, int value)
 {
+  // pthread_mutex_lock(&mutex);
   int i = key % NBUCKET;
-
+  pthread_mutex_lock(&mutexes[i]);
   // is the key already present?
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
@@ -53,6 +57,7 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
+  pthread_mutex_unlock(&mutexes[i]);
 }
 
 static struct entry*
@@ -115,6 +120,11 @@ main(int argc, char *argv[])
     keys[i] = random();
   }
 
+  // 对锁初始化
+  for (int i = 0; i < NKEYS; i++) {
+    pthread_mutex_init(&mutexes[i], 0);
+  }
+
   //
   // first the puts
   //
@@ -144,4 +154,8 @@ main(int argc, char *argv[])
 
   printf("%d gets, %.3f seconds, %.0f gets/second\n",
          NKEYS*nthread, t1 - t0, (NKEYS*nthread) / (t1 - t0));
+
+    for (int i = 0; i < NKEYS; i++) {
+    pthread_mutex_destroy(&mutexes[i]);
+  }
 }
