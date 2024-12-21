@@ -11,9 +11,31 @@
 #define MAX_THREAD  4
 
 
+// Saved registers for kernel context switches.
+struct context {
+  uint64 ra;
+  uint64 sp;
+
+  // callee-saved
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
+
+
 struct thread {
-  char       stack[STACK_SIZE]; /* the thread's stack */
-  int        state;             /* FREE, RUNNING, RUNNABLE */
+  struct context  context;           /* the thread's context*/
+  char            stack[STACK_SIZE]; /* the thread's stack */
+  int             state;             /* FREE, RUNNING, RUNNABLE */
 
 };
 struct thread all_thread[MAX_THREAD];
@@ -59,10 +81,8 @@ thread_schedule(void)
     next_thread->state = RUNNING;
     t = current_thread;
     current_thread = next_thread;
-    /* YOUR CODE HERE
-     * Invoke thread_switch to switch from t to next_thread:
-     * thread_switch(??, ??);
-     */
+    // 交换线程上下文
+    thread_switch((uint64)&t->context, (uint64)&current_thread->context);
   } else
     next_thread = 0;
 }
@@ -77,6 +97,13 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  // 将 ra 设置为函数入口地址
+  // 当调度返回时，从 ra 开始执行
+  t->context.ra = (uint64)func;
+  // 清除栈的数据
+  memset((void*)t->stack, 0, STACK_SIZE);
+  // 将栈的指针指向栈底
+  t->context.sp = (uint64)((char*)&t->stack + STACK_SIZE);
 }
 
 void 
