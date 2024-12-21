@@ -116,6 +116,12 @@ exec(char *path, char **argv)
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  // 复制新的kernel page并刷新TLB
+  if (pagecopy(p->pagetable, p->kernel_pageta, 0, p->sz) != 0) {
+    goto bad;
+  }
+  ukvminithart(p->kernel_pageta);
+
   if(p->pid==1) vmprint(p->pagetable);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
