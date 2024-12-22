@@ -27,7 +27,9 @@ uservec:
 	# swap a0 and sscratch
         # so that a0 is TRAPFRAME
         csrrw a0, sscratch, a0
-
+        # a0 中现在存放了 trapframe 的地址
+        # 方便后续将寄存器状态保存到 trapframe
+        
         # save the user registers in TRAPFRAME
         sd ra, 40(a0)
         sd sp, 48(a0)
@@ -76,7 +78,7 @@ uservec:
         # restore kernel page table from p->trapframe->kernel_satp
         ld t1, 0(a0)
         csrw satp, t1
-        sfence.vma zero, zero
+        sfence.vma zero, zero # 刷新页表
 
         # a0 is no longer valid, since the kernel page
         # table does not specially map p->tf.

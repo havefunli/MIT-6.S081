@@ -216,6 +216,7 @@ w_mscratch(uint64 x)
 }
 
 // Supervisor Trap Cause
+// 记录陷入的原因
 static inline uint64
 r_scause()
 {
