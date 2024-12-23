@@ -103,4 +103,9 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int  clock_period;           // 时钟周期
+  int  elapsed_period;         // 流逝的时间
+  void (*timed_task)();        // 定时任务
+  int  occupied;               // 当前存在任务 1，反之 0
+  struct trapframe *save_trapframe; // 当执行定时任务后返回到调用时的 trapframe
 };
