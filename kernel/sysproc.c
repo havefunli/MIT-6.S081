@@ -44,11 +44,13 @@ sys_sbrk(void)
   int addr;
   int n;
 
-  if(argint(0, &n) < 0)
+  // 处理负数
+  if(argint(0, &n) < 0 && n < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  // if(growproc(n) < 0)
+  //   return -1;
+  myproc()->sz += n; // 只是增加 sz ，而不真正的申请内存
   return addr;
 }
 
